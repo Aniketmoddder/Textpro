@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 app = FastAPI()
 
 def generate_textpro(effect_url, user_text):
-    # 1. Start a session
+    # 1. Start a session ggggg
     scraper = cloudscraper.create_scraper()
     
     # 2. Get the effect page
