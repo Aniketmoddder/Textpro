@@ -1,70 +1,52 @@
-from fastapi import FastAPI, Query
-import requests
-import re
+from fastapi import FastAPI
+import cloudscraper
+import json
 from bs4 import BeautifulSoup
 
 app = FastAPI()
 
-class TextProAPI:
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        })
-
-    def generate(self, effect_url: str, text: str):
-        # 1. Scrape tokens
-        response = self.session.get(effect_url)
-        html = response.text
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        try:
-            token = soup.find("input", {"id": "token"})["value"]
-            server = soup.find("input", {"id": "build_server"})["value"]
-            server_id = soup.find("input", {"id": "build_server_id"})["value"]
+def generate_textpro(effect_url, user_text):
+    # 1. Start a session
+    scraper = cloudscraper.create_scraper()
+    
+    # 2. Get the effect page
+    response = scraper.get(effect_url)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # 3. Find the "form_value" element you discovered
+    form_value_element = soup.find(id="form_value")
+    
+    if not form_value_element:
+        return {"success": False, "error": "Could not find form_value. The site might be blocking this request."}
+    
+    # 4. Parse the JSON inside that element
+    # This contains the ID, Token, Sign, and Build Server automatically!
+    payload = json.loads(form_value_element.text)
+    
+    # 5. Overwrite the text field with the user's input
+    # TextPro usually uses "text[]" as the key for the input text
+    payload["text[]"] = [user_text]
+    
+    # 6. Send the POST request to the endpoint
+    post_url = "https://textpro.me/effect/create-image"
+    headers = {
+        "Referer": effect_url,
+        "X-Requested-With": "XMLHttpRequest"
+    }
+    
+    result_raw = scraper.post(post_url, data=payload, headers=headers)
+    
+    if result_raw.status_code == 200:
+        res_json = result_raw.json()
+        if res_json.get("success"):
+            # Construct the full image URL
+            full_url = f"{payload['build_server']}{res_json['image']}"
+            return {"success": True, "image_url": full_url}
+        else:
+            return {"success": False, "message": res_json.get("message")}
             
-            # Find the sign value in the raw HTML
-            sign_match = re.search(r'name="sign"\s+value="([^"]+)"', html)
-            if not sign_match:
-                sign_match = re.search(r'sign"\s*:\s*"([^"]+)"', html) or re.search(r'sign\s*=\s*"([^"]+)"', html)
-            
-            if not sign_match:
-                return {"error": "Could not find security sign"}
-
-            sign = sign_match.group(1)
-            effect_id = effect_url.split("-")[-1].replace(".html", "")
-
-            # 2. Post Data
-            payload = {
-                "id": effect_id,
-                "text[]": [text],
-                "grecaptcharesponse": "", 
-                "token": token,
-                "build_server": server,
-                "build_server_id": server_id,
-                "sign": sign
-            }
-
-            headers = {"Referer": effect_url, "X-Requested-With": "XMLHttpRequest"}
-            res = self.session.post("https://textpro.me/effect/create-image", data=payload, headers=headers)
-            
-            if res.status_code == 200:
-                result = res.json()
-                if result.get("success"):
-                    return {"success": True, "image_url": f"https://textpro.me{result['image']}"}
-                return {"success": False, "message": result.get("message")}
-            
-            return {"success": False, "message": f"HTTP Error {res.status_code}"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-# --- API Endpoints ---
-
-@app.get("/")
-def home():
-    return {"status": "TextPro API is running"}
+    return {"success": False, "error": f"Server returned {result_raw.status_code}"}
 
 @app.get("/generate")
-def create_effect(url: str, text: str):
-    api = TextProAPI()
-    return api.generate(url, text)
+def api_endpoint(url: str, text: str):
+    return generate_textpro(url, text)
